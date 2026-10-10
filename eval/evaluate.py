@@ -138,11 +138,14 @@ def evaluate_one(gt_full, est_full, a):
         (lambda g, e, D: rpe(g, e, D, PoseRelation.rotation_angle_deg))
     d = {"delta_m": a.delta}
     if a.delta < plen:
-        rt, rr = rpe(gt_r, est_r, a.delta, PoseRelation.translation_part), rot_rpe(gt_r, est_r, a.delta)
-        d["trans_m"] = stats_of(rt)
-        d["rot_deg"] = stats_of(rr) if rr is not None else None
-        d["trans_percent_rmse"] = d["trans_m"]["rmse"] / a.delta * 100
-        d["n_pairs"] = int(len(rt.error))
+        try:
+            rt, rr = rpe(gt_r, est_r, a.delta, PoseRelation.translation_part), rot_rpe(gt_r, est_r, a.delta)
+            d["trans_m"] = stats_of(rt)
+            d["rot_deg"] = stats_of(rr) if rr is not None else None
+            d["trans_percent_rmse"] = d["trans_m"]["rmse"] / a.delta * 100
+            d["n_pairs"] = int(len(rt.error))
+        except Exception as e:  # e.g. matched part of the trajectory shorter than delta
+            d["note"] = f"RPE not computable: {e}"
     else:
         d["note"] = f"path length {plen:.1f} m <= delta"
     res["rpe"] = d
@@ -151,7 +154,10 @@ def evaluate_one(gt_full, est_full, a):
     for L in a.segments:
         if L >= plen:
             continue
-        rt, rr = rpe(gt_r, est_r, L, PoseRelation.translation_part), rot_rpe(gt_r, est_r, L)
+        try:
+            rt, rr = rpe(gt_r, est_r, L, PoseRelation.translation_part), rot_rpe(gt_r, est_r, L)
+        except Exception:  # no pair of that path length in the matched part
+            continue
         if len(rt.error) == 0:
             continue
         st, sr = stats_of(rt), (stats_of(rr) if rr is not None else None)
@@ -245,7 +251,8 @@ def make_plots(outdir, data, title):
         axes[k].plot(gt0.timestamps - t0, g[:, k], "k--", label="GT")
         for i, l in enumerate(labels):
             e = unwrap_deg(data[l]["est"])
-            ek = e[:, k] + 360 * np.round((g[:, k] - e[:, k]).mean() / 360)
+            gl = unwrap_deg(data[l]["gt"])  # this method's own matched GT (counts differ between methods)
+            ek = e[:, k] + 360 * np.round((gl[:, k] - e[:, k]).mean() / 360)
             axes[k].plot(data[l]["est"].timestamps - t0, ek, color=cmap(i), label=l)
         axes[k].set_ylabel(f"{n} [deg]"); axes[k].grid(alpha=.3)
     axes[0].legend(); axes[-1].set_xlabel("time [s]"); fig.suptitle(f"{title}: orientation (aligned)")

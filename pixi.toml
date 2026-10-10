@@ -16,6 +16,7 @@ tqdm = "*"
 [pypi-dependencies]
 evo = "*"
 rosbags = "*"
+clearml = "*"
 
 [activation.env]
 MPLBACKEND = "Agg"
@@ -28,3 +29,7 @@ bag-to-asl = "python tools/bag_to_asl.py"
 asl-to-bag = "python tools/asl_to_bag.py"
 gt-to-tum = "python tools/gt_to_tum.py"
 test-eval = "python eval/test_eval.py"
+run-local = "bash scripts/run_local.sh"
+upload-drive = "bash scripts/upload_drive.sh"
+fetch-colab = "bash scripts/fetch_colab_results.sh"
+check-access = "bash scripts/check_access.sh"
