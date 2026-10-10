@@ -26,7 +26,7 @@ def main():
                 "ape_rmse_m": r["ape_trans_m"]["rmse"], "ape_mean_m": r["ape_trans_m"]["mean"],
                 "ape_max_m": r["ape_trans_m"]["max"],
                 f"rpe_trans_rmse_m@{rp['delta_m']:g}m": rp.get("trans_m", {}).get("rmse"),
-                f"rpe_rot_rmse_deg@{rp['delta_m']:g}m": rp.get("rot_deg", {}).get("rmse"),
+                f"rpe_rot_rmse_deg@{rp['delta_m']:g}m": (rp.get("rot_deg") or {}).get("rmse"),
             })
     if not rows:
         raise SystemExit(f"no metrics.json under {root}")

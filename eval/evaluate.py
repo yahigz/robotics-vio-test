@@ -10,6 +10,15 @@ unless --sim3):
 
 Outputs in <out-root>/<dataset>/<seq>/: metrics.json, metrics.csv, *.png, *.pdf
 
+ROVER-style ground truth (total-station prism position only, sparse ~2 Hz, identity quaternions):
+  --trans-only            skip rotation metrics/plots (reported as N/A); RPE compares world-frame displacements
+  --est-lever-arm X Y Z   position of the prism in the IMU frame [m]; every estimated IMU pose is moved to the
+                          prism: p_prism = p + R * t  (R = estimated IMU-to-world rotation) before alignment
+  --lever-arm-calib YAML  same, read prism.position_in_imu from a calib yaml (e.g. data/rover/calib_t265.yaml)
+  --interp-est            linearly interpolate the estimate (slerp for rotation) at the GT timestamps
+                          instead of nearest-neighbour association (skips GT times in estimate gaps > 0.5 s)
+  --clearml               report metrics + plots to ClearML (project "vio-bench", task "<method>/<dataset>/<seq>")
+
 Example:
   pixi run eval --gt data/euroc/MH_01_easy/gt_tum.txt \\
       --est openvins=results/openvins/euroc/MH_01_easy/traj_tum.txt \\
@@ -31,6 +40,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from evo.core import metrics, sync  # noqa: E402
+from evo.core.trajectory import PoseTrajectory3D  # noqa: E402
+from scipy.spatial.transform import Rotation, Slerp  # noqa: E402
 from evo.core.metrics import PoseRelation, Unit  # noqa: E402
 from evo.tools import file_interface  # noqa: E402
 
@@ -48,6 +59,39 @@ def path_length(traj):
     return float(np.sum(np.linalg.norm(np.diff(traj.positions_xyz, axis=0), axis=1)))
 
 
+def apply_lever_arm(traj, t_vec):
+    """p_prism = p + R t for every IMU pose (R: IMU->world). Orientation unchanged."""
+    R = np.array([pose[:3, :3] for pose in traj.poses_se3])
+    pos = traj.positions_xyz + R @ np.asarray(t_vec, float)
+    return PoseTrajectory3D(pos, traj.orientations_quat_wxyz.copy(), traj.timestamps.copy())
+
+
+def interp_at(traj, times, max_gap):
+    """Interpolate traj (linear position, slerp rotation) at `times`; drops times outside traj or in gaps > max_gap."""
+    ts = traj.timestamps
+    ok = (times >= ts[0]) & (times <= ts[-1])
+    times = times[ok]
+    i1 = np.clip(np.searchsorted(ts, times, side="left"), 1, len(ts) - 1)
+    i0 = i1 - 1
+    ok = (ts[i1] - ts[i0]) <= max_gap
+    times, i0, i1 = times[ok], i0[ok], i1[ok]
+    w = ((times - ts[i0]) / np.maximum(ts[i1] - ts[i0], 1e-9))[:, None]
+    pos = (1 - w) * traj.positions_xyz[i0] + w * traj.positions_xyz[i1]
+    q = traj.orientations_quat_wxyz[:, [1, 2, 3, 0]]  # xyzw for scipy
+    rot = Rotation.from_quat(q)
+    # slerp between neighbours (per-sample, vectorised through unique times)
+    r0, r1 = rot[i0], rot[i1]
+    rel = (r0.inv() * r1).as_rotvec()
+    rr = r0 * Rotation.from_rotvec(rel * w)
+    qq = rr.as_quat()[:, [3, 0, 1, 2]]
+    return PoseTrajectory3D(pos, qq, times)
+
+
+def identity_orient(traj):
+    q = np.zeros((traj.num_poses, 4)); q[:, 0] = 1.0
+    return PoseTrajectory3D(traj.positions_xyz.copy(), q, traj.timestamps.copy())
+
+
 def rpe(gt, est, delta, relation):
     m = metrics.RPE(relation, float(delta), Unit.meters, 0.1, all_pairs=False)
     m.process_data((gt, est))
@@ -55,7 +99,17 @@ def rpe(gt, est, delta, relation):
 
 
 def evaluate_one(gt_full, est_full, a):
-    gt, est = sync.associate_trajectories(gt_full, copy.deepcopy(est_full), a.t_max_diff, a.t_offset)
+    est_in = copy.deepcopy(est_full)
+    if a.est_lever_arm is not None:
+        est_in = apply_lever_arm(est_in, a.est_lever_arm)
+    if a.interp_est:
+        est_in = interp_at(PoseTrajectory3D(est_in.positions_xyz, est_in.orientations_quat_wxyz,
+                                            est_in.timestamps + a.t_offset), gt_full.timestamps, a.interp_max_gap)
+        if est_in.num_poses < 3:
+            raise RuntimeError("fewer than 3 GT timestamps covered by the estimate (check clocks/--t-offset)")
+        gt, est = sync.associate_trajectories(gt_full, est_in, 1e-6, 0.0)
+    else:
+        gt, est = sync.associate_trajectories(gt_full, est_in, a.t_max_diff, a.t_offset)
     n = gt.num_poses
     if n < 3:
         raise RuntimeError(f"only {n} associated poses (t_max_diff={a.t_max_diff}); check clocks/offset")
@@ -67,6 +121,8 @@ def evaluate_one(gt_full, est_full, a):
         "duration_s": float(gt.timestamps[-1] - gt.timestamps[0]),
         "gt_path_length_m": path_length(gt), "est_path_length_m": path_length(est_al),
         "alignment": "sim3" if a.sim3 else "se3", "scale": float(s),
+        "trans_only": bool(a.trans_only), "interp_est": bool(a.interp_est),
+        "est_lever_arm_m": None if a.est_lever_arm is None else [float(x) for x in a.est_lever_arm],
     }
     ape = metrics.APE(PoseRelation.translation_part)
     ape.process_data((gt, est_al))
@@ -74,11 +130,17 @@ def evaluate_one(gt_full, est_full, a):
     res["ape_trans_m"]["end_error"] = float(ape.error[-1])
 
     plen = res["gt_path_length_m"]
+    if a.trans_only:  # GT has no orientation: compare world-frame displacements only
+        gt_r, est_r = identity_orient(gt), identity_orient(est_al)
+    else:
+        gt_r, est_r = gt, est_al
+    rot_rpe = (lambda g, e, D: None) if a.trans_only else \
+        (lambda g, e, D: rpe(g, e, D, PoseRelation.rotation_angle_deg))
     d = {"delta_m": a.delta}
     if a.delta < plen:
-        rt, rr = rpe(gt, est_al, a.delta, PoseRelation.translation_part), \
-            rpe(gt, est_al, a.delta, PoseRelation.rotation_angle_deg)
-        d["trans_m"], d["rot_deg"] = stats_of(rt), stats_of(rr)
+        rt, rr = rpe(gt_r, est_r, a.delta, PoseRelation.translation_part), rot_rpe(gt_r, est_r, a.delta)
+        d["trans_m"] = stats_of(rt)
+        d["rot_deg"] = stats_of(rr) if rr is not None else None
         d["trans_percent_rmse"] = d["trans_m"]["rmse"] / a.delta * 100
         d["n_pairs"] = int(len(rt.error))
     else:
@@ -89,16 +151,15 @@ def evaluate_one(gt_full, est_full, a):
     for L in a.segments:
         if L >= plen:
             continue
-        rt, rr = rpe(gt, est_al, L, PoseRelation.translation_part), \
-            rpe(gt, est_al, L, PoseRelation.rotation_angle_deg)
+        rt, rr = rpe(gt_r, est_r, L, PoseRelation.translation_part), rot_rpe(gt_r, est_r, L)
         if len(rt.error) == 0:
             continue
-        st, sr = stats_of(rt), stats_of(rr)
+        st, sr = stats_of(rt), (stats_of(rr) if rr is not None else None)
         seg[str(L)] = {"trans_m": st, "rot_deg": sr, "trans_percent_rmse": st["rmse"] / L * 100,
-                       "rot_deg_per_m_rmse": sr["rmse"] / L, "n_pairs": int(len(rt.error))}
-        seg_err[L] = (rt.error, rr.error)
+                       "rot_deg_per_m_rmse": sr["rmse"] / L if sr else None, "n_pairs": int(len(rt.error))}
+        seg_err[L] = (rt.error, rr.error if rr is not None else None)
     res["rpe_segments"] = seg
-    return res, dict(gt=gt, est=est_al, ape=ape, seg_err=seg_err)
+    return res, dict(gt=gt, est=est_al, ape=ape, seg_err=seg_err, trans_only=bool(a.trans_only))
 
 
 def unwrap_deg(traj):
@@ -113,6 +174,7 @@ def save(fig, base):
 
 def make_plots(outdir, data, title):
     labels = list(data)
+    trans_only = all(d.get("trans_only") for d in data.values())
     cmap = plt.get_cmap("tab10")
     gt0 = data[labels[0]]["gt"]
     t0 = gt0.timestamps[0]
@@ -150,8 +212,9 @@ def make_plots(outdir, data, title):
     # RPE boxplots per segment length
     segs = sorted({L for l in labels for L in data[l]["seg_err"]})
     if segs:
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-        for ax, idx, yl in ((axes[0], 0, "RPE translation [m]"), (axes[1], 1, "RPE rotation [deg]")):
+        panels = [(0, "RPE translation [m]")] + ([] if trans_only else [(1, "RPE rotation [deg]")])
+        fig, axes = plt.subplots(1, len(panels), figsize=(5.5 * len(panels), 4), squeeze=False)
+        for ax, (idx, yl) in zip(axes[0], panels):
             w = 0.8 / len(labels)
             for i, l in enumerate(labels):
                 pos = [segs.index(L) + (i - (len(labels) - 1) / 2) * w for L in segs if L in data[l]["seg_err"]]
@@ -174,6 +237,8 @@ def make_plots(outdir, data, title):
         axes[k].set_ylabel(f"{n} [m]"); axes[k].grid(alpha=.3)
     axes[0].legend(); axes[-1].set_xlabel("time [s]"); fig.suptitle(f"{title}: position (aligned)")
     save(fig, outdir / "xyz_over_time")
+    if trans_only:
+        return
     fig, axes = plt.subplots(3, 1, figsize=(9, 7), sharex=True)
     g = unwrap_deg(gt0)
     for k, n in enumerate(("roll", "pitch", "yaw")):
@@ -185,6 +250,36 @@ def make_plots(outdir, data, title):
         axes[k].set_ylabel(f"{n} [deg]"); axes[k].grid(alpha=.3)
     axes[0].legend(); axes[-1].set_xlabel("time [s]"); fig.suptitle(f"{title}: orientation (aligned)")
     save(fig, outdir / "rpy_over_time")
+
+
+def report_clearml(a, label, res, outdir):
+    """Optional ClearML reporting; never raises (warns and continues)."""
+    try:
+        from clearml import Task
+    except Exception as e:  # not installed
+        print(f"[clearml] WARNING: clearml not importable ({e}); skipping reporting", file=sys.stderr)
+        return
+    try:
+        task = Task.init(project_name="vio-bench", task_name=f"{label}/{a.dataset}/{a.seq}",
+                         reuse_last_task_id=False, auto_connect_frameworks=False)
+        lg = task.get_logger()
+        task.connect({"dataset": a.dataset, "seq": a.seq, "method": label, "alignment": res["alignment"],
+                      "trans_only": res["trans_only"], "interp_est": res["interp_est"],
+                      "est_lever_arm_m": res["est_lever_arm_m"], "delta_m": a.delta}, name="eval")
+        for k, v in flatten({k: res[k] for k in ("ape_trans_m", "rpe", "rpe_segments")}).items():
+            if isinstance(v, (int, float)):
+                lg.report_single_value(k, float(v))
+        for k in ("n_gt", "n_est", "n_matched", "duration_s", "gt_path_length_m", "est_path_length_m"):
+            lg.report_single_value(k, float(res[k]))
+        for img in sorted(outdir.glob("*.png")):
+            lg.report_image("plots", img.stem, iteration=0, local_path=str(img))
+        task.upload_artifact("metrics.json", artifact_object=str(outdir / "metrics.json"))
+        task.upload_artifact("estimate", artifact_object=res["estimate_file"])
+        task.flush(wait_for_uploads=True)
+        task.close()
+        print(f"[clearml] reported {label}/{a.dataset}/{a.seq}")
+    except Exception as e:
+        print(f"[clearml] WARNING: reporting failed ({type(e).__name__}: {e}); continuing", file=sys.stderr)
 
 
 def flatten(d, prefix=""):
@@ -208,9 +303,12 @@ def md_tables(dataset, seq, results, sim3):
         lines.append(f"| {l} | {r['n_matched']}/{r['n_est']} | {f(r['ape_trans_m']['rmse'])} | "
                      f"{f(r['ape_trans_m']['mean'])} | {f(r['ape_trans_m']['max'])} | "
                      f"{f(rp['trans_m']['rmse']) if 'trans_m' in rp else 'n/a'} | "
-                     f"{f(rp['rot_deg']['rmse']) if 'rot_deg' in rp else 'n/a'} |")
+                     f"{f(rp['rot_deg']['rmse']) if rp.get('rot_deg') else 'N/A'} |")
     delta = next(iter(results.values()))["rpe"]["delta_m"]
-    lines.insert(2, f"RPE delta = {delta:g} m")
+    r0 = next(iter(results.values()))
+    extra = (", translation only" if r0.get("trans_only") else "") + (", interpolated at GT times" if r0.get("interp_est") else "") \
+        + (f", lever arm {r0['est_lever_arm_m']}" if r0.get("est_lever_arm_m") else "")
+    lines.insert(2, f"RPE delta = {delta:g} m{extra}")
     lines.insert(3, "")
     segs = sorted({float(L) for r in results.values() for L in r["rpe_segments"]})
     if segs:
@@ -220,8 +318,8 @@ def md_tables(dataset, seq, results, sim3):
             cells = []
             for L in segs:
                 s = r["rpe_segments"].get(str(L if L != int(L) else int(L))) or r["rpe_segments"].get(str(L))
-                cells.append(f"{s['trans_m']['rmse']:.3f} ({s['trans_percent_rmse']:.2f}%) / {s['rot_deg']['rmse']:.2f}"
-                             if s else "-")
+                rot = f"{s['rot_deg']['rmse']:.2f}" if s and s.get("rot_deg") else "N/A"
+                cells.append(f"{s['trans_m']['rmse']:.3f} ({s['trans_percent_rmse']:.2f}%) / {rot}" if s else "-")
             lines.append(f"| {l} | " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -241,7 +339,21 @@ def main():
                     help="seconds added to estimate timestamps before association")
     ap.add_argument("--sim3", action="store_true", help="Sim(3) alignment (scale) instead of SE(3)")
     ap.add_argument("--no-plots", action="store_true")
+    ap.add_argument("--trans-only", action="store_true",
+                    help="GT has positions only (e.g. ROVER prism): no rotation RPE / rpy plots (N/A)")
+    ap.add_argument("--est-lever-arm", type=float, nargs=3, metavar=("X", "Y", "Z"), default=None,
+                    help="prism position in the IMU frame [m]; p_prism = p + R t applied to every estimated pose")
+    ap.add_argument("--lever-arm-calib", default=None, metavar="YAML",
+                    help="read the lever arm from prism.position_in_imu of a calib yaml (alternative to --est-lever-arm)")
+    ap.add_argument("--interp-est", action="store_true",
+                    help="interpolate the estimate (lerp + slerp) at GT timestamps instead of nearest association")
+    ap.add_argument("--interp-max-gap", type=float, default=0.5,
+                    help="with --interp-est: skip GT times where neighbouring estimate samples are further apart [s]")
+    ap.add_argument("--clearml", action="store_true", help="report metrics + plots to ClearML project vio-bench")
     a = ap.parse_args()
+    if a.lever_arm_calib and a.est_lever_arm is None:
+        import yaml
+        a.est_lever_arm = yaml.safe_load(open(a.lever_arm_calib))["prism"]["position_in_imu"]
     a.segments = [int(x) if float(x).is_integer() else x for x in a.segments]
 
     gt = file_interface.read_tum_trajectory_file(a.gt)
@@ -261,7 +373,8 @@ def main():
         sys.exit("no successful evaluations")
 
     meta = {"dataset": a.dataset, "seq": a.seq, "gt": a.gt, "t_max_diff": a.t_max_diff,
-            "t_offset": a.t_offset, "delta_m": a.delta, "alignment": "sim3" if a.sim3 else "se3"}
+            "t_offset": a.t_offset, "delta_m": a.delta, "trans_only": a.trans_only,
+            "interp_est": a.interp_est, "est_lever_arm_m": a.est_lever_arm, "alignment": "sim3" if a.sim3 else "se3"}
     (outdir / "metrics.json").write_text(json.dumps({"meta": meta, "methods": results}, indent=2))
     rows = [{"dataset": a.dataset, "seq": a.seq, "method": l, **flatten(r)} for l, r in results.items()]
     keys = sorted({k for r in rows for k in r}, key=lambda k: (k not in ("dataset", "seq", "method"), k))
@@ -271,6 +384,9 @@ def main():
     if not a.no_plots:
         make_plots(outdir, data, f"{a.dataset}/{a.seq}")
     print(md_tables(a.dataset, a.seq, results, a.sim3))
+    if a.clearml:
+        for l, r in results.items():
+            report_clearml(a, l, r, outdir)
     print(f"\nWrote results to {outdir}")
 
 
