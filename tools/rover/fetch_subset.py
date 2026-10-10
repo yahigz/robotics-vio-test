@@ -241,26 +241,32 @@ def cmd_calib():
     print("calibration ->", d)
 
 
-def cmd_fetch(seq, stereo, max_gb, list_only=False, source="hf"):
+def cmd_fetch(seq, stereo, max_gb, list_only=False, source="hf", max_seconds=None):
     src = make_source(seq, source)
     seqdir = os.path.join(ROOT, seq); os.makedirs(os.path.join(seqdir, "raw"), exist_ok=True)
     size, ents = read_central_directory(src)
     groups = select(ents)
+    full_left = len(groups["cam_left"])
+    full_sz = {k: sum(e["csize"] for e in v) for k, v in groups.items()}
+    if max_seconds:  # time-ordered prefix (images are stored in time order): useful on slow links
+        groups["cam_left"] = groups["cam_left"][:int(max_seconds * 30)]
+        groups["cam_right"] = groups["cam_right"][:int(max_seconds * 30)]
     sz = {k: sum(e["csize"] for e in v) for k, v in groups.items()}
-    mono_total = sz["cam_left"] + sz["text"]
-    stereo_total = mono_total + sz["cam_right"]
+    # mono/stereo decision is taken on the FULL-sequence sizes (a --max-seconds prefix does not change it)
+    mono_total = full_sz["cam_left"] + full_sz["text"]
+    stereo_total = mono_total + full_sz["cam_right"]
     use_right = (stereo == "yes") or (stereo == "auto" and stereo_total <= max_gb * 1e9)
     dec = dict(seq=seq, zip_bytes=size, n_left=len(groups["cam_left"]), n_right=len(groups["cam_right"]),
                left_png_bytes=sz["cam_left"], right_png_bytes=sz["cam_right"], text_bytes=sz["text"],
                mono_total=mono_total, stereo_total=stereo_total, max_gb=max_gb,
-               gaps_left=contiguous(groups["cam_left"]), mode="stereo" if use_right else "mono",
+               gaps_left=contiguous(groups["cam_left"]), full_n_left=full_left, max_seconds=max_seconds, mode="stereo" if use_right else "mono",
                reason=("stereo fits" if use_right else "mono only: stereo would be %.2f GB > %.1f GB" %
                        (stereo_total / 1e9, max_gb)))
     print(json.dumps(dec, indent=1), flush=True)
     json.dump(dec, open(os.path.join(seqdir, "raw", "decision.json"), "w"), indent=1)
     json.dump({k: v for k, v in groups.items()}, open(os.path.join(seqdir, "raw", "central_dir_subset.json"), "w"))
     if list_only: return
-    need = (stereo_total if use_right else mono_total)
+    need = sz["cam_left"] + sz["text"] + (sz["cam_right"] if use_right else 0)
     free = shutil.disk_usage(seqdir).free
     assert free > need * 1.2 + 2e9, f"not enough disk: free {free/1e9:.1f} GB, need {need/1e9:.1f} GB"
     assert mono_total <= max_gb * 1e9, "mono subset exceeds the per-sequence limit"
@@ -279,7 +285,8 @@ if __name__ == "__main__":
     ap.add_argument("seq", nargs="?")
     ap.add_argument("--stereo", default="auto", choices=["auto", "yes", "no"])
     ap.add_argument("--source", default="hf", choices=["hf", "fdm"])
+    ap.add_argument("--max-seconds", type=float, default=None, help="fetch only the first N seconds of images (prefix)")
     ap.add_argument("--max-gb", type=float, default=5.0)
     a = ap.parse_args()
     if a.cmd == "calib": cmd_calib()
-    else: cmd_fetch(a.seq, a.stereo, a.max_gb, list_only=(a.cmd == "list"), source=a.source)
+    else: cmd_fetch(a.seq, a.stereo, a.max_gb, list_only=(a.cmd == "list"), source=a.source, max_seconds=a.max_seconds)

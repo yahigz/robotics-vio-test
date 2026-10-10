@@ -34,6 +34,11 @@ def to_ns(s):
     return int(a) * 10**9 + int((b + "0" * 9)[:9])
 
 
+def stamp_ns(fname):
+    """PNG name -> ns; handles <t>.png and left_img_<idx>_<t>.png (park sequence)."""
+    return to_ns(os.path.basename(fname)[:-4].split("_")[-1])
+
+
 def sha(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -51,10 +56,13 @@ def stats_dt(t, nominal):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("seq"); ap.add_argument("--keep-raw", action="store_true")
+    ap.add_argument("--allow-incomplete", action="store_true", help="fetch was interrupted: convert the contiguous prefix of frames that exist")
     a = ap.parse_args()
     sd = os.path.join(ROOT, a.seq); raw = os.path.join(sd, "raw")
-    assert os.path.exists(os.path.join(raw, "FETCH_DONE")), "fetch not finished"
     dec = json.load(open(os.path.join(raw, "decision.json")))
+    if not os.path.exists(os.path.join(raw, "FETCH_DONE")):
+        assert a.allow_incomplete, "fetch not finished (use --allow-incomplete for a prefix)"
+        dec["max_seconds"] = dec.get("max_seconds") or -1; dec["interrupted"] = True
     # --- IMU
     rows = [l.split(",") for l in open(os.path.join(raw, "imu.txt")) if l.strip() and not l.startswith("#")]
     tns = np.array([to_ns(r[0]) for r in rows], dtype=np.int64)
@@ -71,19 +79,25 @@ def main():
     # --- camera. File names carry the full-precision stamp (cam_left.txt is rounded to 6-7 digits, differing by <1 us
     # for some frames), so the PNG names are authoritative; cam_left.txt is only used as a count check.
     n_txt = sum(1 for l in open(os.path.join(raw, "cam_left.txt")) if l.strip())
-    avail = {to_ns(f[:-4]): f for f in os.listdir(os.path.join(raw, "cam_left")) if f.endswith(".png")}
+    avail = {stamp_ns(f): f for f in os.listdir(os.path.join(raw, "cam_left")) if f.endswith(".png")}
     ddir = os.path.join(sd, "asl", "mav0", "cam0", "data")
     done = {int(f[:-4]) for f in os.listdir(ddir)} if os.path.isdir(ddir) else set()  # idempotent re-run
     cam_ns = np.array(sorted(set(avail) | done), dtype=np.int64)
-    assert len(cam_ns) == n_txt, (len(cam_ns), n_txt)
+    partial = dec.get("max_seconds") is not None  # time-ordered prefix fetched on a slow link
+    if not partial:
+        assert len(cam_ns) == n_txt, (len(cam_ns), n_txt)
     names = [str(x) for x in cam_ns]
+    if partial:  # keep inertial data only up to 0.5 s after the last image we have
+        m = t_imu <= cam_ns[-1] + 500_000_000
+        t_imu, v = t_imu[m], v[m]; acc, gyr = v[:, 0:3], v[:, 3:6]
+        imu_stats = stats_dt(t_imu / 1e9, 0.005)
     ok = (cam_ns >= t_imu[0]) & (cam_ns <= t_imu[-1])
     asl = os.path.join(sd, "asl", "mav0")
     os.makedirs(os.path.join(asl, "cam0", "data"), exist_ok=True); os.makedirs(os.path.join(asl, "imu0"), exist_ok=True)
     n_moved = n_drop = 0; png_bytes = 0; crcs = 0
     lines = ["#timestamp [ns],filename"]
     kept_ns = []
-    avail = {to_ns(f[:-4]): f for f in os.listdir(os.path.join(raw, "cam_left")) if f.endswith(".png")}
+    avail = {stamp_ns(f): f for f in os.listdir(os.path.join(raw, "cam_left")) if f.endswith(".png")}
     for n, ns, good in zip(names, cam_ns, ok):
         dst = os.path.join(asl, "cam0", "data", f"{ns}.png")
         if int(ns) in avail:
@@ -106,6 +120,9 @@ def main():
     # --- GT (TUM, identity quaternion)
     g = [l.split() for l in open(os.path.join(raw, "groundtruth.txt")) if l.strip() and not l.startswith("#")]
     gt_ns = np.array([to_ns(r[0]) for r in g], dtype=np.int64)
+    if partial:  # GT restricted to the image span +-2 s
+        m = (gt_ns >= cam_ns[0] - 2_000_000_000) & (gt_ns <= cam_ns[-1] + 2_000_000_000)
+        g = [r for r, k in zip(g, m) if k]; gt_ns = gt_ns[m]
     with open(os.path.join(sd, "gt_tum.txt"), "w") as f:
         for ns, r in zip(gt_ns, g):
             f.write(f"{ns/1e9:.9f} {r[1]} {r[2]} {r[3]} 0 0 0 1\n")
@@ -113,7 +130,7 @@ def main():
     plen = float(np.linalg.norm(np.diff(gt_xyz, axis=0), axis=1).sum())
     cam_stats = stats_dt(kept_ns / 1e9, 1 / 30)
     t0 = lambda x: float(x / 1e9)
-    man = dict(seq=a.seq, mode=dec["mode"], decision=dec,
+    man = dict(seq=a.seq, mode=dec["mode"], decision=dec, partial_prefix=partial,
                cam0=dict(frames=n_moved, dropped_after_imu_end=n_drop, png_bytes=png_bytes, **cam_stats),
                imu0=dict(rows_raw=int(len(tns)), rows_written=int(len(t_imu)), raw=imu_raw_stats, written=imu_stats,
                          acc_norm_mean=float(np.linalg.norm(acc, axis=1).mean()),
@@ -127,8 +144,9 @@ def main():
                sha256={p: sha(os.path.join(sd, p)) for p in ["gt_tum.txt", "asl/mav0/cam0/data.csv", "asl/mav0/imu0/data.csv"]})
     # digest over the CRC32s of the (verified) PNG members from the zip central directory
     cd = json.load(open(os.path.join(raw, "central_dir_subset.json")))
+    kept_set = set(int(x) for x in kept_ns)
     man["png_crc32_digest_sha256"] = hashlib.sha256(
-        "\n".join(f"{os.path.basename(e['name'])}:{e['crc']:08x}" for e in cd["cam_left"]).encode()).hexdigest()
+        "\n".join(f"{os.path.basename(e['name'])}:{e['crc']:08x}" for e in cd["cam_left"] if stamp_ns(e['name']) in kept_set).encode()).hexdigest()
     json.dump(man, open(os.path.join(sd, "manifest.json"), "w"), indent=1)
     if not a.keep_raw:
         shutil.rmtree(raw)
