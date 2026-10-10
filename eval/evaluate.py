@@ -92,8 +92,13 @@ def identity_orient(traj):
     return PoseTrajectory3D(traj.positions_xyz.copy(), q, traj.timestamps.copy())
 
 
+RPE_ALL_PAIRS = True
+
+
 def rpe(gt, est, delta, relation):
-    m = metrics.RPE(relation, float(delta), Unit.meters, 0.1, all_pairs=False)
+    # all_pairs=True: a segment starts at every pose (overlapping segments) -> many more pairs than evo's default
+    # consecutive non-overlapping segments, which matters for short paths and sparse GT
+    m = metrics.RPE(relation, float(delta), Unit.meters, 0.1, all_pairs=RPE_ALL_PAIRS)
     m.process_data((gt, est))
     return m
 
@@ -340,6 +345,8 @@ def main():
     ap.add_argument("--seq", required=True)
     ap.add_argument("--out-root", default="results/summary")
     ap.add_argument("--delta", type=float, default=10.0, help="RPE delta in meters (default 10)")
+    ap.add_argument("--rpe-consecutive", action="store_true",
+                    help="RPE on consecutive non-overlapping segments (evo default) instead of all overlapping pairs")
     ap.add_argument("--segments", type=float, nargs="*", default=[10, 20, 50, 100])
     ap.add_argument("--t-max-diff", dest="t_max_diff", type=float, default=0.02)
     ap.add_argument("--t-offset", dest="t_offset", type=float, default=0.0,
@@ -358,6 +365,8 @@ def main():
                     help="with --interp-est: skip GT times where neighbouring estimate samples are further apart [s]")
     ap.add_argument("--clearml", action="store_true", help="report metrics + plots to ClearML project vio-bench")
     a = ap.parse_args()
+    global RPE_ALL_PAIRS
+    RPE_ALL_PAIRS = not a.rpe_consecutive
     if a.lever_arm_calib and a.est_lever_arm is None:
         import yaml
         a.est_lever_arm = yaml.safe_load(open(a.lever_arm_calib))["prism"]["position_in_imu"]
