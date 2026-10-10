@@ -1,0 +1,29 @@
+[workspace]
+name = "vio-bench"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[dependencies]
+python = "3.11.*"
+numpy = "*"
+scipy = "*"
+matplotlib = "*"
+pandas = "*"
+opencv = "*"
+pyyaml = "*"
+tqdm = "*"
+
+[pypi-dependencies]
+evo = "*"
+rosbags = "*"
+
+[activation.env]
+MPLBACKEND = "Agg"
+
+[tasks]
+eval = "python eval/evaluate.py"
+collect = "python eval/collect.py"
+bag-filter = "python tools/bag_filter.py"
+bag-to-asl = "python tools/bag_to_asl.py"
+gt-to-tum = "python tools/gt_to_tum.py"
+test-eval = "python eval/test_eval.py"
