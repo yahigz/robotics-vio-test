@@ -58,3 +58,16 @@ Other: vocabulary is un-tarred at build time (`Vocabulary/ORBvoc.txt`). The `COP
 * Mono-inertial only starts producing poses ~56 s into MH_01 (sequence starts static; IMU initialization needs motion, ~80 "Not enough motion"/"bad imu" map resets in the log). Compare only on the covered time span (evo does this via timestamp association); report coverage.
 * Wall time ~ real time (sequence = 184 s) because the example sleeps to the camera rate. One early mono run took 1121 s when the Docker VM was starved by other heavy jobs (CPU-bound local mapping); results were similar (ATE 0.093 m), so the run time is a load artefact, not the code.
 * Each mode writes to its own `results/orbslam3_<mode>/` folder, so modes do not overwrite each other.
+
+## ROVER T265 mono-inertial
+`docker compose run --rm orbslam3 rover <seq> mono_inertial rover_t265_mono_inertial.yaml [--runs 3] [--max-frames N]`
+(`--max-frames N` uses only the first N camera frames, for smoke tests; `run.sh` is bind-mounted, no rebuild needed.)
+`config/rover_t265_mono_inertial.yaml` = `tools/rover/generated/orbslam3` (KannalaBrandt8 `Camera1.fx..k4` = T265 left fisheye, 848x800, fps 30, IMU 200 Hz,
+Kalibr noise x2) with:
+* `IMU.T_b_c1` = `T_imu_cam` (camera -> IMU/body), checked against `data/rover/calib_t265.yaml` (`T_imu_cam`, the inverse of Kalibr's `T_cam_imu`): correct direction, no change.
+* **ORB tuning** (the only change): `nFeatures 1500 -> 2000`, `iniThFAST 20 -> 12`, `minThFAST 7 -> 5`. With the generated values the 90 s garden_small smoke test
+  reset the map ~240 times ("Fail to track local map!" before IMU init; low-contrast grass, circular fisheye) and only initialised at t = 56 s (APE 0.26 m on the last 34 s);
+  with the tuned values: 0 resets, poses from t = 11 s (first motion), 2372 poses over 80 s.
+* Smoke test (garden_small, first 2700 frames = 90 s, 1 run, loop closing off): APE rmse 0.77 m (SE(3)), 0.20 m with Sim(3) alignment, i.e. the mono-inertial scale is
+  still ~off early on (GT path 31 m). The full-sequence numbers are in the top-level README table.
+* Trajectory is the IMU (body) pose; ROVER evaluation moves it to the prism with the lever arm (`eval/evaluate.py --lever-arm-calib`).

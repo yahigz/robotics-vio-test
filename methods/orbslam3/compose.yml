@@ -10,5 +10,6 @@ services:
       - ../../data:/workspace/data:ro
       - ../../results:/workspace/results
       - ./config:/workspace/config:ro
+      - ./run.sh:/usr/local/bin/run_orbslam3:ro   # edits need no rebuild
     working_dir: /workspace
-    # usage: docker compose run --rm orbslam3 <dataset> <seq> <mode> <settings.yaml> [--runs N] [--loop-closing]
+    # usage: docker compose run --rm orbslam3 <dataset> <seq> <mode> <settings.yaml> [--runs N] [--loop-closing] [--max-frames N]

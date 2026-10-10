@@ -2,19 +2,21 @@
 # Run ORB-SLAM3 (EuRoC/ASL example executables) on data/<dataset>/<seq>/asl and write
 # results/orbslam3_<mode>/<dataset>/<seq>/traj_tum.txt  (TUM, t in seconds, IMU/body-frame pose)
 #
-# usage: run_orbslam3 <dataset> <seq> <mono_inertial|stereo_inertial> <settings.yaml> [--runs N] [--loop-closing]
+# usage: run_orbslam3 <dataset> <seq> <mono_inertial|stereo_inertial> <settings.yaml> [--runs N] [--loop-closing] [--max-frames N]
 #   settings.yaml: path, or a file name in /workspace/config (then /opt/vio-config)
 #   --loop-closing : enable loop closing (default OFF -> `loopClosing: 0` forced into the settings copy)
+#   --max-frames N : only use the first N camera frames (smoke tests; trims the timestamps file)
 set -euo pipefail
 
-usage() { sed -n '2,7p' "$0"; exit 1; }
+usage() { sed -n '2,8p' "$0"; exit 1; }
 [ $# -ge 4 ] || usage
 DATASET=$1; SEQ=$2; MODE=$3; SETTINGS=$4; shift 4
-RUNS=1; LOOP=0
+RUNS=1; LOOP=0; MAXF=0
 while [ $# -gt 0 ]; do
   case $1 in
     --runs) RUNS=$2; shift 2;;
     --loop-closing) LOOP=1; shift;;
+    --max-frames) MAXF=$2; shift 2;;
     *) echo "unknown arg $1"; usage;;
   esac
 done
@@ -40,13 +42,14 @@ mkdir -p "$OUT"; : > "$OUT/log.txt"
 
 # timestamps file: one ns timestamp per line, from cam0/data.csv
 grep -v '^#' "$DATA/mav0/cam0/data.csv" | cut -d, -f1 | tr -d '\r' | sed '/^$/d' > "$TMP/times.txt"
+[ "$MAXF" -gt 0 ] && { head -n "$MAXF" "$TMP/times.txt" > "$TMP/t.txt"; mv "$TMP/t.txt" "$TMP/times.txt"; }
 # settings copy with the loop-closing switch forced
 grep -v '^loopClosing' "$SETTINGS" > "$TMP/settings.yaml"
 echo "loopClosing: $LOOP" >> "$TMP/settings.yaml"
 cp "$TMP/settings.yaml" "$OUT/settings_used.yaml"
 
 {
-  echo "# orbslam3 $(date -u +%FT%TZ) dataset=$DATASET seq=$SEQ mode=$MODE settings=$SETTINGS runs=$RUNS loopClosing=$LOOP"
+  echo "# orbslam3 $(date -u +%FT%TZ) dataset=$DATASET seq=$SEQ mode=$MODE settings=$SETTINGS runs=$RUNS loopClosing=$LOOP max_frames=$MAXF"
   echo "# frames: $(wc -l < "$TMP/times.txt")"
 } | tee -a "$OUT/log.txt"
 
