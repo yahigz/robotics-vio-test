@@ -1,0 +1,23 @@
+# Paths are relative to this file, so it works standalone and via root `include:`.
+services:
+  openvins:
+    image: vio-bench/openvins:v2.7
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    environment:
+      - BAG
+      - BAG_START
+      - BAG_DURR
+      - VERBOSITY
+    volumes:
+      - ../../data:/data:ro
+      - ../../results:/results
+      # live-mount configs/launch/scripts so edits need no rebuild
+      - ./config:/opt/vio/config:ro
+      - ./launch:/opt/vio/launch:ro
+      - ./scripts:/opt/vio/scripts:ro
+      - ./run.sh:/opt/vio/run.sh:ro
+    # usage: docker compose run --rm openvins <dataset> <seq> <config>
+    # e.g.   docker compose run --rm openvins euroc MH_01_easy euroc_mav
