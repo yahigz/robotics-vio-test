@@ -33,6 +33,6 @@ Google Drive нужен только по желанию: как кеш собр
 
 ## После этого
 Скажи «запускай». Я сделаю следующее:
-1. Локально прогоню OpenVINS и ORB-SLAM3 (mono-inertial и stereo-inertial) на 3 последовательностях ROVER, плюс sanity-check на EuRoC.
+1. Локально прогоню OpenVINS и ORB-SLAM3 (mono-inertial: для ROVER скачана только левая камера) на 3 последовательностях ROVER, плюс sanity-check на EuRoC.
 2. Запущу DBA-Fusion в Colab (код из GitHub, данные качаются на диск Colab) и заберу результаты из ClearML (`pixi run fetch-colab`).
 3. Посчитаю APE/RPE и сведу всё в `results/summary/all.md` с графиками.

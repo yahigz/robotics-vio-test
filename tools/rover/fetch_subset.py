@@ -265,6 +265,18 @@ def cmd_fetch(seq, stereo, max_gb, list_only=False, source="hf", max_seconds=Non
     print(json.dumps(dec, indent=1), flush=True)
     json.dump(dec, open(os.path.join(seqdir, "raw", "decision.json"), "w"), indent=1)
     json.dump({k: v for k, v in groups.items()}, open(os.path.join(seqdir, "raw", "central_dir_subset.json"), "w"))
+    # append mode: skip left frames already converted into asl/ (named <ns>.png); fetch only the missing ones
+    ddir = os.path.join(seqdir, "asl", "mav0", "cam0", "data")
+    if os.path.isdir(ddir):
+        have = {f[:-4] for f in os.listdir(ddir)}
+        def ns_of(e):
+            a, _, b = os.path.basename(e["name"])[:-4].split("_")[-1].partition(".")
+            return str(int(a) * 10**9 + int((b + "0" * 9)[:9]))
+        groups["cam_left"] = [e for e in groups["cam_left"] if ns_of(e) not in have]
+        print(f"append mode: {len(have)} frames already converted, {len(groups['cam_left'])} to fetch", flush=True)
+        pp0 = os.path.join(seqdir, "raw", "progress.json")
+        if os.path.exists(pp0): os.remove(pp0)
+        sz["cam_left"] = sum(e["csize"] for e in groups["cam_left"])
     if list_only: return
     need = sz["cam_left"] + sz["text"] + (sz["cam_right"] if use_right else 0)
     free = shutil.disk_usage(seqdir).free
