@@ -1,0 +1,70 @@
+# TEMPLATE for a ground-robot / custom dataset. Copy to configs/<dataset>.yaml and edit.
+# Every value marked CHANGEME must come from YOUR calibration (Kalibr camchain-imucam).
+#
+# Notes specific to ground robots / DBA-Fusion:
+#  * Monocular VIO needs excitation to initialise: the visual-inertial alignment only
+#    succeeds when accelerations vary (std of delta-v/dt over 8 keyframes >= 0.25 m/s^2,
+#    see init_VI in dbaf_frontend.py). A robot driving straight at constant speed or
+#    starting stationary may take long / never initialise. Consider a short manual
+#    wiggle at start, or use the sequence start after motion begins.
+#  * Planar motion with constant velocity makes scale/gravity weakly observable.
+#  * Wheel odometry / GNSS fusion exist upstream (batch_whu.py) but are OUT OF SCOPE here
+#    (we run pure VIO); to enable you'd need to fill dbaf.frontend.all_odo/all_gnss.
+#  * Keep camera frame convention: T_imu_cam maps points from CAMERA (x right, y down,
+#    z forward) to the IMU/body frame. Kalibr gives T_cam_imu: invert it.
+#  * IMU axes: any consistent body frame works for the VI alignment (gravity estimated),
+#    but timestamps camera/IMU must share one clock (time offset NOT estimated by us).
+#  * Upstream resizes images to ~384x512 pixels area, dims multiple of 8, and scales
+#    intrinsics accordingly (done by the adapter).
+dataset: ground_robot_template
+
+camera:
+  model: radtan            # radtan | equidistant | none     CHANGEME
+  fx: 600.0                # CHANGEME
+  fy: 600.0                # CHANGEME
+  cx: 320.0                # CHANGEME
+  cy: 240.0                # CHANGEME
+  distortion: [0.0, 0.0, 0.0, 0.0]   # CHANGEME (k1 k2 p1 p2; equidistant: k1..k4)
+  width: 640               # CHANGEME
+  height: 480              # CHANGEME
+
+T_imu_cam: [ 1.0, 0.0, 0.0, 0.0,    # CHANGEME (row-major 4x4, camera -> IMU)
+             0.0, 1.0, 0.0, 0.0,
+             0.0, 0.0, 1.0, 0.0,
+             0.0, 0.0, 0.0, 1.0 ]
+
+imu:
+  rate_hz: 200             # CHANGEME
+  gyro_unit: rad_s         # rad_s | deg_s   CHANGEME
+  datasheet: {accel_noise_density: 0.0, gyro_noise_density: 0.0, accel_random_walk: 0.0, gyro_random_walk: 0.0}
+  # [accel_noise, gyro_noise, accel_bias_rw, gyro_bias_rw]. Start from the TUM-VI numbers
+  # and inflate for cheaper IMUs (vibration on ground robots is strong: x2..x5 on accel).
+  dbaf_noise: [0.00981, 0.005142225623, 0.04905, 0.00727220522]
+  init_pose_sigma: [0.1, 0.1, 0.0001, 0.0001, 0.0001, 0.0001]
+  init_bias_sigma: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+stride: 3                  # pick so keyframe candidates are ~5-8 Hz
+clahe: true
+
+dbaf:
+  buffer: 80
+  max_factors: 48
+  beta: 0.3
+  filter_thresh: 2.4
+  warmup: 8
+  keyframe_thresh: 3.0
+  frontend_thresh: 16.0
+  frontend_window: 5
+  frontend_radius: 2
+  frontend_nms: 1
+  active_window: 12
+  inac_range: 3
+  backend_thresh: 22.0
+  backend_radius: 2
+  backend_nms: 3
+  upsample: false
+  visual_only: 0
+  far_threshold: 0.02
+  translation_threshold: 0.2   # metres between keyframes; lower it for slow robots
+  mask_threshold: -1.0
+  skip_edge: [-4, -5, -6]

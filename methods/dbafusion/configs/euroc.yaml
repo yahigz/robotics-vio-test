@@ -1,0 +1,72 @@
+# DBA-Fusion config for EuRoC MAV (monocular cam0 + IMU, VIO mode, no GNSS/odometry).
+#
+# IMPORTANT: upstream DBA-Fusion ships NO EuRoC demo script (only TUM-VI, KITTI-360,
+# SubT, WHU). It does ship calib/euroc.txt and dataset/euroc_to_hdf5.py, from which the
+# camera intrinsics below are taken (they equal the official EuRoC cam0 sensor.yaml).
+# The algorithm parameters (`dbaf:` block) and IMU noise are copied from the TUM-VI
+# recipe (batch_tumvi.py / demo_vio_tumvi.py) -- same camera rate (20 Hz), same IMU rate
+# (200 Hz) -- and are NOT tuned for EuRoC. Treat them as a documented starting point.
+dataset: euroc
+
+camera:                      # cam0, pinhole + radial-tangential
+  model: radtan              # radtan | equidistant | none
+  fx: 458.654
+  fy: 457.296
+  cx: 367.215
+  cy: 248.375
+  distortion: [-0.28340811, 0.07395907, 0.00019359, 1.76187114e-05]   # k1 k2 p1 p2
+  width: 752
+  height: 480
+
+# Pose of the camera in the IMU/body frame, T_imu_cam (= EuRoC cam0/sensor.yaml `T_BS`,
+# = "body_T_cam"). DBA-Fusion calls this Tbc / Ti1c. Row-major 4x4.
+T_imu_cam: [ 0.0148655429818, -0.999880929698,  0.00414029679422, -0.0216401454975,
+             0.999557249008,   0.0149672133247, 0.025715529948,   -0.064676986768,
+            -0.0257744366974,  0.00375618835797, 0.999660727178,   0.00981073058949,
+             0.0,              0.0,              0.0,              1.0 ]
+
+# Layout of imu0/data.csv: t[ns], gx gy gz [rad/s], ax ay az [m/s^2]  (EuRoC/ASL).
+imu:
+  rate_hz: 200
+  gyro_unit: rad_s           # rad_s | deg_s  (DBA-Fusion internally wants deg/s; adapter converts)
+  # Datasheet values from EuRoC imu0/sensor.yaml (continuous-time densities) -- logged for
+  # reference only, NOT fed to DBA-Fusion directly.
+  datasheet:
+    accel_noise_density: 2.0e-3
+    gyro_noise_density: 1.6968e-4
+    accel_random_walk: 3.0e-3
+    gyro_random_walk: 1.9393e-5
+  # What DBA-Fusion's set_imu_params() receives: [accel_noise, gyro_noise, accel_bias_rw,
+  # gyro_bias_rw] (GTSAM preintegration sigmas). Values = TUM-VI demo values (deliberately
+  # inflated vs. datasheet; the authors tuned them for robustness). UNTUNED for EuRoC.
+  dbaf_noise: [0.00981, 0.005142225623, 0.04905, 0.00727220522]
+  init_pose_sigma: [0.1, 0.1, 0.0001, 0.0001, 0.0001, 0.0001]
+  init_bias_sigma: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+# Frame-rate handling. EuRoC cam is 20 Hz; stride 4 -> 5 Hz keyframe candidates (as TUM-VI
+# recipe). Output trajectory is still produced at the full camera rate via IMU propagation.
+stride: 4
+clahe: true
+
+dbaf:                        # == argparse args of demo_vio_tumvi.py (values of batch_tumvi.py)
+  buffer: 80
+  max_factors: 48            # ~10 GB GPU at 48; 36 -> ~6 GB (use on small GPUs)
+  beta: 0.3
+  filter_thresh: 2.4
+  warmup: 8
+  keyframe_thresh: 3.0
+  frontend_thresh: 16.0
+  frontend_window: 5
+  frontend_radius: 2
+  frontend_nms: 1
+  active_window: 12
+  inac_range: 3
+  backend_thresh: 22.0
+  backend_radius: 2
+  backend_nms: 3
+  upsample: false
+  visual_only: 0
+  far_threshold: 0.02
+  translation_threshold: 0.2
+  mask_threshold: -1.0
+  skip_edge: [-4, -5, -6]
