@@ -3,6 +3,7 @@
 ## Quick start
 ```bash
 # 0. one-time setup (user): ClearML credentials, GitHub token for Colab, Colab GPU runtime + secrets -> docs/ACCESS_SETUP.md
+# 0b. DBA-Fusion launch checklist (Colab) -> docs/RUN_COLAB.md
 pixi install                           # eval/tools environment (python 3.11, evo, rosbags, clearml)
 docker compose build                   # openvins + orbslam3 images (once, ~10 min each)
 
