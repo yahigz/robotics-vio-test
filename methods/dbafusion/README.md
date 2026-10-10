@@ -138,3 +138,20 @@ methods/dbafusion/
 `python tests/test_scripts.py` (needs numpy, scipy, pyyaml, opencv, torch, evo, matplotlib): config validation, ASL readers/unit conversion, frame selection, image
 preprocessing sizes, GT conversion, `to_tum` de-duplication, evo APE/RPE on a synthetic rigidly transformed trajectory, torch_scatter shim, build-patch idempotence.
 The notebook JSON validates with nbformat and every code cell parses; CUDA, GTSAM, ClearML and Colab-specific cells are untested.
+
+## 9. ROVER T265 (notebook v2: list of sequences, rectification in Colab)
+
+* `configs/rover_t265.yaml` = `tools/rover/generated/dbafusion/rover_t265.yaml`: DBA-Fusion needs pinhole images, so the notebook runs `tools/rover/undistort_asl.py`
+  on Colab's local disk (`/content/work/undist/<seq>`, 640x480, hfov 100 deg, R = I so `T_imu_cam` is unchanged; ~1 GB per sequence, never written back to Drive) before the
+  adapter reads it. The notebook asserts that the config's `fx/width` match its `ROVER_RECT` constants.
+* IMU: ROVER's `imu0/data.csv` is already EuRoC format (200 Hz, rad/s, m/s^2): `gyro_unit: rad_s`, the adapter converts to deg/s. Checked locally with
+  `asl_to_dbafusion.py --check` on a rectified 15 s snippet: 200.3 Hz, accel norm 9.84, gyro max 82 deg/s, 113 frames at stride 4.
+* Parameters at the top of the notebook: `SEQUENCES = [("rover", ...), ...]` (all run in one session, failures do not stop the loop), `CONFIG_BY_DATASET`, `OVERRIDES`, `MAX_FRAMES`, `RPE_DELTA_M = 10`.
+* Code: `scripts/upload_drive.sh` puts `methods/dbafusion`, `tools`, `eval`, `CONTRACT.md` at `MyDrive/vio-bench/repo` (the notebook rsyncs it to local disk) and the data at
+  `MyDrive/vio-bench/data/<dataset>/<seq>/{asl,gt_tum.txt}`.
+* Evaluation in the notebook runs the repo's `eval/evaluate.py` (ROVER: `--trans-only --interp-est --lever-arm-calib tools/rover/calib/calib_t265.yaml`), so numbers are the same as on the laptop
+  (`pixi run fetch-colab` re-runs the evaluation locally next to OpenVINS/ORB-SLAM3). DBA-Fusion outputs the **IMU/body** pose, hence the lever arm applies.
+* **Untested** (no GPU here): everything that runs in Colab (builds, driver, ClearML, the rectification cell, the evaluation cell). Tested locally: notebook JSON (nbformat) and cell syntax,
+  `undistort_asl.py` + `asl_to_dbafusion.py --check` on ROVER data, `eval/evaluate.py` with the exact notebook command line on another method's trajectory.
+  Config risks: noise values are Kalibr x2 and untuned (the euroc/TUM-VI values are very different, e.g. gyro random walk 1.4e-4 vs 7e-3); VI initialisation needs excitation, ROVER starts stationary for ~10 s
+  and the robot moves slowly (~0.4 m/s, planar), so initialisation may be late or fail; fixed `stride: 4` = 7.5 Hz keyframe candidates at 30 fps.
