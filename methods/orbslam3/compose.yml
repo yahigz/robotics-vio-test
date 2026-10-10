@@ -1,0 +1,14 @@
+# Paths are relative to this file (methods/orbslam3/); repo root = ../..
+services:
+  orbslam3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vio-bench/orbslam3:4452a3c
+    platform: linux/arm64
+    volumes:
+      - ../../data:/workspace/data:ro
+      - ../../results:/workspace/results
+      - ./config:/workspace/config:ro
+    working_dir: /workspace
+    # usage: docker compose run --rm orbslam3 <dataset> <seq> <mode> <settings.yaml> [--runs N] [--loop-closing]

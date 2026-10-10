@@ -1,0 +1,31 @@
+diff --git a/src/LoopClosing.cc b/src/LoopClosing.cc
+index 319afb5..e6a82e4 100644
+--- a/src/LoopClosing.cc
++++ b/src/LoopClosing.cc
+@@ -982,7 +982,7 @@ void LoopClosing::CorrectLoop()
+         unique_lock<mutex> lock(mMutexGBA);
+         mbStopGBA = true;
+ 
+-        mnFullBAIdx++;
++        mnFullBAIdx = true; // was bool++ (ill-formed in C++17)
+ 
+         if(mpThreadGBA)
+         {
+@@ -1233,7 +1233,7 @@ void LoopClosing::MergeLocal()
+         unique_lock<mutex> lock(mMutexGBA);
+         mbStopGBA = true;
+ 
+-        mnFullBAIdx++;
++        mnFullBAIdx = true; // was bool++ (ill-formed in C++17)
+ 
+         if(mpThreadGBA)
+         {
+@@ -1806,7 +1806,7 @@ void LoopClosing::MergeLocal2()
+         unique_lock<mutex> lock(mMutexGBA);
+         mbStopGBA = true;
+ 
+-        mnFullBAIdx++;
++        mnFullBAIdx = true; // was bool++ (ill-formed in C++17)
+ 
+         if(mpThreadGBA)
+         {
