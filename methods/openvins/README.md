@@ -40,3 +40,13 @@ otherwise, via pixi), mounts it as `/bags`, runs OpenVINS (`BAG` env override), 
 - Upstream says `bag_start` 40 for MH_01 (skips still part); default here is 0.
 - Image is ~5.5 GB (ROS base + dev libs + 400 MB upstream source); could be trimmed with a multi-stage build.
 - Wall-clock timing varies a lot when other Docker builds run concurrently (stereo run once took 960 s under load).
+
+## ROVER T265 mono-inertial (validated on garden_small, 326 s, 121 m of path)
+`config/rover_t265_mono` = `tools/rover/generated/openvins` + **one manual tuning**: `zupt_max_velocity 0.2 -> 0.05`, `zupt_max_disparity 0.5 -> 0.1`.
+* With the generated ZUPT settings the filter diverged within ~5 s of the robot starting to move (garden APE 29.8 m, trajectory 88 m away from GT):
+  the ground robot creeps at ~0.4 m/s, ZUPT kept firing (disparity < 0.5 px on a 280 px-focal fisheye) and the monocular filter lost scale.
+  `try_zupt: false` and the strict values both fix it (80 s snippet: 0.48 / 0.46 m APE; full: 0.95 / 0.84 m); strict ZUPT kept, it still helps at real stops.
+  `init_dyn_use`, time-offset calibration, pixel sigma 2 and `max_slam: 0` were tried on the snippet and did not help.
+* Verified, not wrong: `T_imu_cam` direction (config uses cam->IMU = `T_imu_cam` of the calib), IMU units (accel norm 9.84 m/s^2 at rest, gravity on +y), IMU noise (Kalibr x2).
+* Result (APE with prism lever arm, SE(3) alignment): see `results/summary/rover/garden_small_2024-05-29_1/` and the table in the top-level README.
+* Wall time ~40 s for the 326 s sequence (+ ~50 s bag conversion in `run_from_asl.sh`).
