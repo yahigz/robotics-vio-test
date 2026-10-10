@@ -30,7 +30,7 @@ import argparse, json, os, shutil, struct, subprocess, sys, time, zlib
 
 BASE = "https://fdm.hs-esslingen.de/schmidt2025rover"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "rover"))
-CHUNK = 64 << 20
+CHUNK = 16 << 20
 SLACK = 1024
 
 
@@ -73,7 +73,7 @@ def make_source(seq, which):
 def curl_range(url, start, end, tries=6):
     """Fetch bytes [start,end] inclusive."""
     for k in range(tries):
-        cmd = ["curl", "-sS", "-f", "-L", "--connect-timeout", "30", "--max-time", "900",
+        cmd = ["curl", "-sS", "-f", "-L", "--connect-timeout", "30", "--max-time", "600", "--speed-limit", "5000", "--speed-time", "40",
                "-r", f"{start}-{end}", url]
         r = subprocess.run(cmd, capture_output=True)
         if r.returncode == 0 and len(r.stdout) == end - start + 1:
@@ -209,7 +209,7 @@ def plan_chunks(g, i):
     return plan
 
 
-def fetch_group(src, seqdir, g, key, prog, size, jobs=4):
+def fetch_group(src, seqdir, g, key, prog, size, jobs=2):
     """Download+verify+write members of group g in order; `jobs` ranges are prefetched in parallel."""
     from concurrent.futures import ThreadPoolExecutor
     plan = plan_chunks(g, prog.get(key, 0))
