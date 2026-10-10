@@ -19,7 +19,7 @@ docker compose run --rm orbslam3 <dataset> <seq> mono_inertial|stereo_inertial <
 ```
 `settings.yaml` is a path, or a file name looked up in `./config` (mounted at `/workspace/config`) and then in the image.
 
-Outputs in `results/orbslam3/<dataset>/<seq>/`:
+Outputs in `results/orbslam3_<mode>/<dataset>/<seq>/` (e.g. `orbslam3_mono_inertial`):
 `traj_tum.txt` (= run 1), `traj_tum_run<K>.txt`, `kf_traj_tum*.txt` (keyframes only), `log.txt`, `settings_used.yaml`.
 
 ## Output semantics (verified in source, `System::SaveTrajectoryEuRoC`)
@@ -57,4 +57,4 @@ Other: vocabulary is un-tarred at build time (`Vocabulary/ORBvoc.txt`). The `COP
 * Mono-inertial: paper reports ~0.036 m (Sim(3)-style monocular evaluation, with loop closing); we match with Sim(3). Under SE(3) alignment (the benchmark protocol) the ~2.3 % residual scale error dominates (0.086 m).
 * Mono-inertial only starts producing poses ~56 s into MH_01 (sequence starts static; IMU initialization needs motion, ~80 "Not enough motion"/"bad imu" map resets in the log). Compare only on the covered time span (evo does this via timestamp association); report coverage.
 * Wall time ~ real time (sequence = 184 s) because the example sleeps to the camera rate. One early mono run took 1121 s when the Docker VM was starved by other heavy jobs (CPU-bound local mapping); results were similar (ATE 0.093 m), so the run time is a load artefact, not the code.
-* All modes write to the same `results/orbslam3/<dataset>/<seq>/` path (contract); run one mode per sequence or copy outputs between runs.
+* Each mode writes to its own `results/orbslam3_<mode>/` folder, so modes do not overwrite each other.

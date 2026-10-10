@@ -12,7 +12,7 @@ Data layout (data/ is gitignored, each sequence <= 5 GB on disk):
 - data/<dataset>/<seq>/gt_tum.txt         ground truth, TUM format, timestamps in seconds
 
 Results:
-- results/<method>/<dataset>/<seq>/traj_tum.txt   "t tx ty tz qx qy qz qw", t in seconds (same clock as GT), pose of IMU/body frame in the method's world frame
+- results/<method>/<dataset>/<seq>/traj_tum.txt (method label may carry a mode suffix, e.g. orbslam3_mono_inertial, openvins_stereo)   "t tx ty tz qx qy qz qw", t in seconds (same clock as GT), pose of IMU/body frame in the method's world frame
 - results/<method>/<dataset>/<seq>/log.txt
 
 Sanity-check dataset: EuRoC MH_01_easy (data/euroc/MH_01_easy/...), GT converted to gt_tum.txt.

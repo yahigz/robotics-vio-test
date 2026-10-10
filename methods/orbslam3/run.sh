@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run ORB-SLAM3 (EuRoC/ASL example executables) on data/<dataset>/<seq>/asl and write
-# results/orbslam3/<dataset>/<seq>/traj_tum.txt  (TUM, t in seconds, IMU/body-frame pose)
+# results/orbslam3_<mode>/<dataset>/<seq>/traj_tum.txt  (TUM, t in seconds, IMU/body-frame pose)
 #
 # usage: run_orbslam3 <dataset> <seq> <mono_inertial|stereo_inertial> <settings.yaml> [--runs N] [--loop-closing]
 #   settings.yaml: path, or a file name in /workspace/config (then /opt/vio-config)
@@ -27,7 +27,7 @@ case $MODE in
 esac
 
 DATA=/workspace/data/$DATASET/$SEQ/asl
-OUT=/workspace/results/orbslam3/$DATASET/$SEQ
+OUT=/workspace/results/orbslam3_$MODE/$DATASET/$SEQ
 [ -f "$DATA/mav0/cam0/data.csv" ] || { echo "missing $DATA/mav0/cam0/data.csv"; exit 1; }
 [ -f "$DATA/mav0/imu0/data.csv" ] || { echo "missing imu0/data.csv"; exit 1; }
 if   [ -f "$SETTINGS" ]; then :
