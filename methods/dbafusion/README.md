@@ -39,10 +39,10 @@ Upstream targets python 3.10 / torch 1.11+cu113 / numpy 1.25 / torch_scatter 2.0
 1. **lietorch + droid_backends**: built from source against Colab's torch with `scripts/patch_build.py`, which (a) writes two clean
    setup files whose `-gencode` is the *detected* GPU capability + PTX (upstream stops at sm_86 without PTX, so L4/sm_89 would fail),
    (b) replaces deprecated `Tensor.type()` in `AT_DISPATCH_*` by `scalar_type()`, (c) adds `-std=c++17`. If the build fails with the
-   bundled (old, pre-3.4) Eigen, the notebook retries with system Eigen 3.4 (`libeigen3-dev`). Wheels cached on Drive, key = python/torch/arch.
+   bundled (old, pre-3.4) Eigen, the notebook retries with system Eigen 3.4 (`libeigen3-dev`). Wheels are cached in the optional Drive build cache, key = python/torch/arch.
 2. **Custom GTSAM**: built from source (cmake, Python wrapper, no TBB, no march=native so the cache is portable, no unstable/tests/examples),
    first with system pybind11>=2.13 (the fork's bundled pybind11 is from 2023 and may not support Colab's python), falling back to the bundled one.
-   `make install` + `make python-install`; the result (site-packages `gtsam` + `/usr/local/lib/libgtsam*`) is tarred to Drive by `scripts/gtsam_cache.py`.
+   `make install` + `make python-install`; the result (site-packages `gtsam` + `/usr/local/lib/libgtsam*`) is tarred into the optional Drive build cache by `scripts/gtsam_cache.py`.
 3. **torch_scatter**: not installed; pure-torch shim (`scripts/shims/torch_scatter.py`, unit-tested against a loop reference).
 4. **numpy-quaternion, open3d, h5py**: not needed (our driver replaces the demo script).
 5. `evo`, `clearml`, `gdown`, `pyyaml` via pip.
@@ -87,23 +87,26 @@ methods/dbafusion/
 1. **ClearML**: create a free account at https://app.clear.ml -> Settings -> Workspace -> *Create new credentials*. Note the five values
    `CLEARML_API_ACCESS_KEY`, `CLEARML_API_SECRET_KEY`, `CLEARML_API_HOST=https://api.clear.ml`, `CLEARML_WEB_HOST=https://app.clear.ml`, `CLEARML_FILES_HOST=https://files.clear.ml`.
 2. **Colab Secrets** (key icon in the left bar of Colab): add the five names above with those values, switch *Notebook access* ON for each.
-3. **Data on Drive**: `MyDrive/vio-bench/data/<dataset>/<seq>/asl/mav0/{cam0,imu0}/...` and `MyDrive/vio-bench/data/<dataset>/<seq>/gt_tum.txt`
-   (CONTRACT.md layout; copy from `data/` on the laptop). For the EuRoC sanity check you can instead set `DOWNLOAD_EUROC = True`
-   (downloads MH_01_easy, ~1.5 GB zip, from the ETH mirror; if the URL has moved edit `scripts/fetch_euroc.py`/pass `--url`).
-4. **Code**: after pushing the repo set `REPO_URL` in the first cell. Until then upload the folder `methods/dbafusion` to `/content/dbafusion`
-   (Colab Files pane) or copy it to `MyDrive/vio-bench/code/dbafusion` (the notebook checks both before cloning).
+3. **GitHub token** (the repo is private): Colab Secret `GITHUB_TOKEN` = fine-grained PAT, only this repo, Contents: read-only (`docs/ACCESS_SETUP.md`, section 2).
+   The notebook clones `https://x-access-token:${GITHUB_TOKEN}@github.com/yahigz/robotics-vio-test.git` at `REPO_REF` (default `main`; branch, tag or commit). Fallback without a token:
+   upload the repo folder to `/content/vio-bench` (Colab Files pane); it is used if present.
+4. **Data**: nothing to upload. The notebook downloads straight to Colab's local disk `/content/data/<dataset>/<seq>/` (idempotent, skipped if present):
+   ROVER = `tools/rover/fetch_subset.py` (HF mirror iis-esslingen/ROVER, HTTP Range: T265 cam_left + imu + GT; mono only, no size limit on Colab) -> `convert_asl.py` (raw pieces deleted) -> `undistort_asl.py`;
+   EuRoC MH_01_easy = `tools/fetch_euroc_hf.py` (pulls only `MH_01_easy.zip`, ~1.6 GB, out of the 12.7 GB `machine_hall.zip` of HF `GlowBond/EuRoC_MAV_Dataset` by Range requests) + `tools/gt_to_tum.py`.
+   `tools/rover/*` hard-code `<repo>/data/rover`, so the notebook symlinks `<repo>/data` -> `/content/data`.
 5. Open `dbafusion_colab.ipynb` in Colab (File -> Upload notebook), Runtime -> Change runtime type -> GPU (T4 is enough; L4/A100 also supported), edit cell 0
-   (`DATASET`, `SEQ`), **Run all**. First run is slow because of the builds (see below); keep the tab open. If the session dies, reconnect and Run all again:
-   builds come from the Drive cache, finished runs are skipped.
-6. Results: `MyDrive/vio-bench/results/dbafusion/<dataset>/<seq>/` with `traj_tum.txt` (contract format), `log.txt`, `run_stats.json`,
-   `eval_metrics.json`, `config_*.yaml`, plots, `raw_result.txt`. ClearML project `vio-bench`, task `dbafusion/<dataset>/<seq>`: hyper-parameters (config, versions, GPU),
-   scalars (APE_translation_m, RPE_translation_m, runtime incl. GPU peak memory), plots, artifacts (trajectory, metrics, config, log), plus ClearML's automatic GPU/CPU monitoring.
-   Download `traj_tum.txt` to the laptop `results/dbafusion/...` and evaluate it with the shared `eval/` tools for apples-to-apples numbers.
-7. Quick smoke test before the full run: `MAX_FRAMES = 100` (writes `*_smoke` files, never the final result).
+   (`SEQUENCES`), **Run all**. First run is slow because of the builds (see below); keep the tab open. If the session dies, reconnect and Run all again:
+   data in `/content/data` is reused if the VM survived, finished sequences (finished ClearML task with a `traj_tum` artifact) are skipped, builds come from the Drive cache if enabled.
+6. Results: **ClearML only** (no Drive). Project `vio-bench`, task `dbafusion/<dataset>/<seq>`: artifacts `traj_tum` (contract format), `log`, `run_stats`, `metrics`, `plots` (evaluation folder), hyper-parameters
+   (config, versions, GPU), scalars (APE_translation_m, RPE_translation_m, runtime incl. GPU peak memory), plots, plus ClearML's automatic GPU/CPU monitoring.
+   On the laptop `pixi run fetch-colab` (= `scripts/fetch_clearml_results.py`) downloads the newest non-smoke task per sequence to `results/dbafusion/<dataset>/<seq>/` and re-runs the shared evaluation + collect.
+   If ClearML is disabled/unavailable the notebook zips `/content/results/dbafusion` and offers it as a browser download.
+7. Quick smoke test before the full run: `MAX_FRAMES = 100` and/or `ROVER_MAX_SECONDS = 20` (prefix download into `/content/data_smoke`; results in `/content/results_smoke`, ClearML task tagged `smoke`, which `fetch-colab` ignores).
 
 ### Expected runtime (estimates -- NOTHING here was run on a GPU)
-* First session on a fresh Drive cache: apt+pip ~2-3 min; GTSAM build ~20-45 min (2 vCPU); lietorch+droid_backends nvcc build ~8-20 min.
-* Later sessions: cache restore ~1-2 min.
+* First session without a build cache (`USE_DRIVE_CACHE=False`, or empty Drive cache; the cache is only a few hundred MB): apt+pip ~2-3 min; GTSAM build ~20-45 min (2 vCPU); lietorch+droid_backends nvcc build ~8-20 min.
+* Later sessions with the Drive cache: restore ~1-2 min. A ClearML-artifact cache for the wheels was considered and not built (free-tier storage limits unknown, large artifacts untested); Drive stays optional.
+* Data download on Colab (untested speed): ROVER sequences are 2-5 GB of PNG each; EuRoC zip 1.6 GB.
 * EuRoC MH_01_easy (3682 frames @20 Hz, stride 4 -> ~920 processed frames): I expect roughly 3-10 min on a T4 (upstream claims near-real-time on a desktop GPU); GPU memory ~10 GB at `max_factors=48` (T4 has 15 GB; use `OVERRIDES={"dbaf.max_factors": 36}` for ~6 GB).
 
 ## 6. Known issues / risks
@@ -117,7 +120,7 @@ methods/dbafusion/
   If it never initialises, the raw file stays empty and `to_tum.py` raises with a clear message.
 * Online (causal) output: poses are the real-time estimates, not a smoothed post-hoc trajectory (upstream also evaluates this).
 * `torch.load` of `droid.pth` is fine with `weights_only=True` (plain tensors); the checkpoint comes from the official DBA-Fusion/DROID-SLAM links via gdown.
-* Google Drive FUSE I/O is slow, therefore the sequence is rsync'ed to `/content/work`.
+* All data and results live on Colab's local disk (Drive FUSE is slow and not used); the VM is ephemeral, so results are uploaded to ClearML immediately after each run.
 * Timestamps are `ns/1e9` in float64 (about 0.2 us resolution), identical to upstream.
 * Monocular: scale comes from the IMU, so RPE/APE use SE(3) alignment without scale as required; the logged `align_scale` is 1 by construction.
   A failed initialisation can still give scale-drifted output; check the plots.
@@ -142,15 +145,14 @@ The notebook JSON validates with nbformat and every code cell parses; CUDA, GTSA
 ## 9. ROVER T265 (notebook v2: list of sequences, rectification in Colab)
 
 * `configs/rover_t265.yaml` = `tools/rover/generated/dbafusion/rover_t265.yaml`: DBA-Fusion needs pinhole images, so the notebook runs `tools/rover/undistort_asl.py`
-  on Colab's local disk (`/content/work/undist/<seq>`, 640x480, hfov 100 deg, R = I so `T_imu_cam` is unchanged; ~1 GB per sequence, never written back to Drive) before the
+  on Colab's local disk (`/content/work/undist/<seq>`, 640x480, hfov 100 deg, R = I so `T_imu_cam` is unchanged; ~1 GB per sequence, local disk only) before the
   adapter reads it. The notebook asserts that the config's `fx/width` match its `ROVER_RECT` constants.
 * IMU: ROVER's `imu0/data.csv` is already EuRoC format (200 Hz, rad/s, m/s^2): `gyro_unit: rad_s`, the adapter converts to deg/s. Checked locally with
   `asl_to_dbafusion.py --check` on a rectified 15 s snippet: 200.3 Hz, accel norm 9.84, gyro max 82 deg/s, 113 frames at stride 4.
 * Parameters at the top of the notebook: `SEQUENCES = [("rover", ...), ...]` (all run in one session, failures do not stop the loop), `CONFIG_BY_DATASET`, `OVERRIDES`, `MAX_FRAMES`, `RPE_DELTA_M = 10`.
-* Code: `scripts/upload_drive.sh` puts `methods/dbafusion`, `tools`, `eval`, `CONTRACT.md` at `MyDrive/vio-bench/repo` (the notebook rsyncs it to local disk) and the data at
-  `MyDrive/vio-bench/data/<dataset>/<seq>/{asl,gt_tum.txt}`.
+* Code: git clone of the private repo (see section 5); data: downloaded on the VM. The 5 GB per-sequence limit of the laptop does not apply on Colab.
 * Evaluation in the notebook runs the repo's `eval/evaluate.py` (ROVER: `--trans-only --interp-est --lever-arm-calib tools/rover/calib/calib_t265.yaml`), so numbers are the same as on the laptop
-  (`pixi run fetch-colab` re-runs the evaluation locally next to OpenVINS/ORB-SLAM3). DBA-Fusion outputs the **IMU/body** pose, hence the lever arm applies.
+  (`pixi run fetch-colab` pulls the ClearML artifacts and re-runs the evaluation locally next to OpenVINS/ORB-SLAM3). DBA-Fusion outputs the **IMU/body** pose, hence the lever arm applies.
 * **Untested** (no GPU here): everything that runs in Colab (builds, driver, ClearML, the rectification cell, the evaluation cell). Tested locally: notebook JSON (nbformat) and cell syntax,
   `undistort_asl.py` + `asl_to_dbafusion.py --check` on ROVER data, `eval/evaluate.py` with the exact notebook command line on another method's trajectory.
   Config risks: noise values are Kalibr x2 and untuned (the euroc/TUM-VI values are very different, e.g. gyro random walk 1.4e-4 vs 7e-3); VI initialisation needs excitation, ROVER starts stationary for ~10 s

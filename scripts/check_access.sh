@@ -19,10 +19,11 @@ done
 [ -f data/rover/calib_t265.yaml ] && ok "data/rover/calib_t265.yaml" || fail "data/rover/calib_t265.yaml missing"
 
 echo "== accesses (user setup, docs/ACCESS_SETUP.md)"
-if command -v rclone >/dev/null && rclone listremotes 2>/dev/null | grep -qx "gdrive:"; then
-  if to 30 rclone lsd gdrive: >/dev/null 2>&1; then ok "rclone remote gdrive: (reachable)"; else warn "rclone remote gdrive: configured but 'rclone lsd gdrive:' failed (token expired? -> rclone config reconnect gdrive:)"; fi
-else fail "rclone remote 'gdrive:' missing -> rclone config (docs/ACCESS_SETUP.md section 2)"; fi
+if git ls-remote origin HEAD >/dev/null 2>&1; then ok "GitHub repo reachable ($(git remote get-url origin))"; else fail "git ls-remote origin failed (ssh key / VPN / remote 'origin' missing)"; fi
 if [ -f "$HOME/clearml.conf" ] && grep -q access_key "$HOME/clearml.conf"; then ok "~/clearml.conf with credentials"; else fail "~/clearml.conf missing/empty -> clearml-init (docs/ACCESS_SETUP.md section 1)"; fi
+if [ -f "$HOME/clearml.conf" ] && command -v pixi >/dev/null; then
+  if to 60 pixi run python -c "from clearml.backend_api.session.client import APIClient; APIClient().projects.get_all(page_size=1)" >/dev/null 2>&1; then ok "ClearML API reachable with these credentials"; else warn "ClearML API call failed (offline / VPN / wrong keys?)"; fi
+fi
 if command -v claude >/dev/null; then
   MCP=$(to 60 claude mcp list 2>&1 || true)
   for s in colab-mcp clearml; do
@@ -31,7 +32,7 @@ if command -v claude >/dev/null; then
     else fail "claude mcp: $s not in 'claude mcp list' (restart Claude Code, docs/ACCESS_SETUP.md section 3)"; fi
   done
 else warn "claude CLI not found, MCP servers not checked"; fi
-warn "Colab (cannot be checked from here): open colab.research.google.com, GPU runtime, add the 5 CLEARML_* secrets (Notebook access ON)"
+warn "Colab (cannot be checked from here): GPU runtime; Secrets GITHUB_TOKEN + 5 CLEARML_* (Notebook access ON), see docs/ACCESS_SETUP.md"
 
 echo
 if [ "$FAILS" = 0 ]; then echo "All checks passed."; else echo "$FAILS check(s) failed."; fi
