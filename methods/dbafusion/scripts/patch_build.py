@@ -8,7 +8,9 @@ AT_DISPATCH_*), removed in recent torch.
 What it does (idempotent):
   1. writes setup_droid_backends.py and setup_lietorch.py (same sources/flags as upstream,
      arch list = the requested compute capability + PTX),
-  2. patches `X.type()` -> `X.scalar_type()` in the AT_DISPATCH macros of src/*.cu,
+  2. patches `X.type()` -> `X.scalar_type()` in the AT_DISPATCH macros of src/*.cu and in lietorch's
+     DISPATCH_GROUP_AND_FLOATING_TYPES calls; lietorch's dispatch.h used `::detail::scalar_type(DeprecatedTypeProperties)`,
+     which recent torch removed, so the macro now takes the ScalarType directly,
   3. optionally (--eigen_dir) points the Eigen include to another directory.
 Usage: python patch_build.py --root DBA-Fusion --arch 7.5 [--eigen_dir /usr/include/eigen3]
 """
@@ -53,6 +55,8 @@ def gencode(arch: str):
 def patch_dispatch(path):
     s = open(path).read()
     n = re.sub(r"(AT_DISPATCH_[A-Z_]+\()(\w+)\.type\(\)", r"\1\2.scalar_type()", s)
+    n = re.sub(r"(DISPATCH_GROUP_AND_FLOATING_TYPES\(\s*\w+\s*,\s*)(\w+)\.type\(\)", r"\1\2.scalar_type()", n)
+    n = n.replace("at::ScalarType _st = ::detail::scalar_type(the_type);", "at::ScalarType _st = the_type;")
     if n != s:
         open(path, "w").write(n)
     return n != s
@@ -68,7 +72,10 @@ def main():
     for name, body in (("setup_droid_backends.py", DROID), ("setup_lietorch.py", LIETORCH)):
         with open(os.path.join(a.root, name), "w") as f:
             f.write(TEMPLATE.format(eigen=a.eigen_dir, gencode=g, body=body))
-    changed = [p for p in ("src/correlation_kernels.cu", "src/altcorr_kernel.cu") if patch_dispatch(os.path.join(a.root, p))]
+    lt = "thirdparty/lietorch/lietorch"
+    files = ("src/correlation_kernels.cu", "src/altcorr_kernel.cu",
+             f"{lt}/include/dispatch.h", f"{lt}/src/lietorch_gpu.cu", f"{lt}/src/lietorch_cpu.cpp")
+    changed = [p for p in files if patch_dispatch(os.path.join(a.root, p))]
     print("wrote setup_droid_backends.py, setup_lietorch.py (arch %s); patched: %s" % (a.arch, changed or "nothing (already patched)"))
 
 
