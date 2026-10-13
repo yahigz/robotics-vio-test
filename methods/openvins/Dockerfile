@@ -1,4 +1,4 @@
-# OpenVINS (filter-based MSCKF VIO) on ROS1 Noetic, native arm64 (aarch64), headless.
+# OpenVINS (filter-based MSCKF VIO) on ROS1 Noetic, headless; native build for the host arch (tested on arm64 / Mac M4; amd64 untested).
 # Pinned: rpng/open_vins v2.7 (commit 93adc241390d13e99232652cf05cbe18a93c7bea)
 FROM ros:noetic-ros-base
 

@@ -7,6 +7,12 @@
 pixi install                           # eval/tools environment (python 3.11, evo, rosbags, clearml)
 docker compose build                   # openvins + orbslam3 images (once, ~10 min each)
 
+# data (not in git; ~3-4 GB per ROVER sequence: T265 left camera + IMU + GT, fetched by HTTP range requests, needs curl)
+mkdir -p data/rover && cp tools/rover/calib/calib_t265.yaml data/rover/
+for s in garden_small_2024-05-29_1 campus_small_2024-02-19 park_2023-07-31; do
+  python3 tools/rover/fetch_subset.py fetch $s && pixi run python tools/rover/convert_asl.py $s; done
+pixi run python tools/fetch_euroc_hf.py --seq MH_01_easy --data-root data   # EuRoC sanity sequence
+
 pixi run check-access                  # 1. checklist: docker, images, pixi env, data, GitHub remote, ~/clearml.conf, MCP servers
 pixi run run-local                     # 2. OpenVINS + ORB-SLAM3 (x3 runs) on ROVER (3 seqs) + EuRoC MH_01, evaluation, tables
                                        #    options: --seqs garden,park --methods openvins --force --runs 3 --clearml
@@ -27,13 +33,28 @@ All scripts are idempotent (finished runs are skipped unless `--force`), log to 
 Datasets: ROVER (T265 fisheye + BMI055 IMU; garden_small_2024-05-29_1, campus_small_2024-02-19, park_2023-07-31; GT = total-station prism **position only**, ~2 Hz,
 prism ~0.45 m from the IMU) and EuRoC MH_01_easy (sanity). ROVER is evaluated with `--trans-only --interp-est` and the prism lever arm (see below).
 
-### Results so far (full table: `results/summary/all.md`)
-| dataset / seq | method | APE rmse [m] (SE(3), prism lever arm for ROVER) | notes |
-|---|---|---|---|
-| ROVER garden_small (326 s, 121 m) | OpenVINS mono-inertial | 0.84 | needs the stricter ZUPT in `config/rover_t265_mono` |
-| ROVER garden_small | ORB-SLAM3 mono-inertial (3 runs, median) | 1.53 (runs 1.38 / 1.53 / 2.55) | loop closing off |
-| EuRoC MH_01_easy | OpenVINS stereo / mono, ORB-SLAM3 mono-inertial | 0.098 / 0.129 / 0.087 | sanity |
-campus_small / park and DBA-Fusion: pending (data download / Colab run).
+### Results (full table: `results/summary/all.md`)
+ROVER, mono-inertial, APE RMSE [m] with SE(3) / Sim(3) alignment, s* = Sim(3) scale (>1: path underestimated), RPE translation RMSE over 10 m.
+ORB-SLAM3: median-APE run of 3. DBA-Fusion: one run on Colab T4.
+
+| seq (GT path) | method | APE SE(3) | APE Sim(3) | s* | RPE@10 m |
+|---|---|---|---|---|---|
+| garden_small (121 m) | OpenVINS | 0.84 | 0.60 | 0.90 | 0.98 |
+| | ORB-SLAM3 (runs 1.38 / 1.53 / 2.55) | 1.53 | 1.16 | 1.24 | 2.51 |
+| | DBA-Fusion | 0.78 | 0.72 | 1.06 | 1.02 |
+| campus_small (150 m) | OpenVINS | 1.83 | 1.64 | 0.89 | 1.11 |
+| | ORB-SLAM3 (runs 2.41 / 2.84 / 3.13) | 2.84 | 2.25 | 1.37 | 4.51 |
+| | DBA-Fusion | 0.64 | 0.56 | 1.05 | 0.77 |
+| park (164 m) | OpenVINS | 1.68 | 1.64 | 0.96 | 1.42 |
+| | ORB-SLAM3 (runs 1.78 / 1.99 / 2.02) | 1.99 | 0.76 | 1.30 | 2.67 |
+| | DBA-Fusion | 5.71 | 5.16 | 0.71 | 3.37 |
+
+DBA-Fusion on park diverges for the first ~60 s after VI initialization (slow start, weak IMU excitation; peak APE 39 m).
+EuRoC MH_01_easy sanity (APE SE(3)): OpenVINS stereo 0.098, OpenVINS mono 0.129, ORB-SLAM3 mono-inertial 0.087.
+
+### Report figures
+`pixi run figures` -> `report/overleaf/` (`figures/*.pdf`, `tables/results.tex`, `main.tex` skeleton for Overleaf, pdfLaTeX).
+Same evaluation as `eval/evaluate.py`; zip for upload: `cd report/overleaf && zip -r ../vio-report-overleaf.zip main.tex figures tables`.
 
 ### Results layout
 ```
@@ -59,6 +80,7 @@ All tasks run with `MPLBACKEND=Agg`. Data layout and result paths: see `CONTRACT
 | `pixi run asl-to-bag data/euroc/MH_01_easy/asl out.bag [--cam1]` | ASL folder to ROS1 bag (`/cam0/image_raw`, `/cam1/image_raw`, `/imu0`) |
 | `pixi run gt-to-tum euroc data.csv out.txt` / `csv ...` / `bag in.bag out.txt --topic /pose` | ground truth to TUM format (seconds) |
 | `pixi run run-local` / `fetch-colab` / `check-access` | Orchestration scripts in `scripts/` (see Quick start). |
+| `pixi run figures` | paper-sized figures + LaTeX table for the report (`report/make_figures.py` -> `report/overleaf/`) |
 | `pixi run test-eval` | self-test: perturbs GT (drift + noise + offset frame) and runs `eval` into `results/summary/selftest/` |
 
 Trajectory format: TUM `t tx ty tz qx qy qz qw`, `t` in seconds, same clock as GT.

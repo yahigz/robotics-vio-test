@@ -1,4 +1,4 @@
-# ORB-SLAM3 (pinned) on native arm64, headless. Build context = methods/orbslam3
+# ORB-SLAM3 (pinned), headless; native build for the host arch (tested on arm64 / Mac M4; amd64 untested). Build context = methods/orbslam3
 FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 # Pinned versions (see README)
